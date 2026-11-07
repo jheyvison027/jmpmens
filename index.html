@@ -6,6 +6,7 @@
   <title>JMP Men's Store</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js" defer></script>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
 :root {
@@ -465,6 +466,16 @@ input.is-saving { opacity: .6; cursor: progress; }
   .order-line img { width: 48px; height: 60px; }
 }
 
+/* Envio do pedido e confirmacao */
+.modal__body .form-error { margin-top: 14px; }
+.modal__foot .btn[hidden] { display: none; }
+.btn:disabled { cursor: not-allowed; }
+.btn.is-loading:disabled { cursor: progress; }
+.success { text-align: center; padding-block: 28px; }
+.success__badge { margin: 0 auto 14px; width: 56px; height: 56px; border-radius: 50%; border: 2px solid var(--gold); color: var(--gold-dark); background: var(--cream-2); display: grid; place-items: center; }
+.success__title { font-family: var(--serif); font-size: 1.7rem; font-weight: 600; margin: 0 0 8px; color: var(--ink); }
+.success p:last-child { color: var(--ink-soft); margin: 0; }
+
 </style>
 </head>
 <body>
@@ -596,7 +607,7 @@ input.is-saving { opacity: .6; cursor: progress; }
         <button type="button" class="icon-btn" data-close aria-label="Fechar">&times;</button>
       </div>
       <div class="modal__body">
-        <p class="hint">Nome, telefone e endereço são usados apenas para montar o resumo do pedido e não são salvos.</p>
+        <p class="hint">Nome, telefone e endereço são usados apenas para montar o pedido enviado ao lojista e não são gravados em banco de dados.</p>
 
         <h3 class="form-section">Contato e entrega</h3>
         <div class="form-grid">
@@ -618,25 +629,7 @@ input.is-saving { opacity: .6; cursor: progress; }
           <label><input type="radio" name="pagamento" value="Pix"><span>Pix</span></label>
           <label><input type="radio" name="pagamento" value="Dinheiro"><span>Dinheiro</span></label>
         </fieldset>
-        <p class="hint pay-note">Crédito e débito são processados em ambiente externo. Esta loja não recebe nem guarda dados de cartão.</p>
-
-        <div class="pix-box" id="pixBox" hidden>
-          <h4>Pagamento por Pix</h4>
-          <p class="pix-box__total">Valor do pedido: <strong id="pixTotal"></strong></p>
-          <div class="pix-box__grid">
-            <figure class="pix-box__qr" id="pixQrWrap" hidden>
-              <img id="pixQrImg" alt="QR Code Pix do lojista" width="200" height="200">
-              <figcaption>Aponte a câmera ou use o leitor de QR Code do app do seu banco.</figcaption>
-            </figure>
-            <div class="pix-box__key" id="pixKeyWrap" hidden>
-              <span class="pix-box__label">Chave Pix</span>
-              <code id="pixKeyText"></code>
-              <button type="button" class="btn btn--ghost btn--sm" id="pixCopy">Copiar chave</button>
-            </div>
-          </div>
-          <p class="hint" id="pixEmpty" hidden>O lojista ainda não cadastrou a chave Pix. Escolha outra forma de pagamento.</p>
-          <p class="hint">Faça o pagamento por Pix e depois confirme o pedido.</p>
-        </div>
+        <p class="hint pay-note">Crédito, débito e Pix são concluídos no ambiente seguro da InfinitePay. Esta loja não recebe nem guarda dados de cartão. Dinheiro é pago na entrega.</p>
 
         <p class="form-error" id="checkoutError" role="alert" hidden></p>
       </div>
@@ -656,11 +649,29 @@ input.is-saving { opacity: .6; cursor: progress; }
     <div class="modal__body">
       <div id="orderSummary"></div>
       <p class="hint" id="orderEmailHint"></p>
+      <p class="form-error" id="orderSendError" role="alert" hidden></p>
     </div>
     <div class="modal__foot">
       <button type="button" class="btn btn--ghost" id="copyOrder">Copiar resumo</button>
-      <a class="btn btn--gold" id="mailOrder" href="#">Enviar por e-mail ao lojista</a>
+      <a class="btn btn--ghost" id="mailFallback" href="#" hidden>Abrir no app de e-mail</a>
+      <button type="button" class="btn btn--gold" id="mailOrder">Ir para o pagamento</button>
     </div>
+  </dialog>
+
+  <!-- Pedido enviado -->
+  <dialog id="dlgSuccess" class="modal" aria-labelledby="successTitle">
+    <div class="modal__head">
+      <h2 id="successTitle">Pedido enviado</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal__body success">
+      <p class="success__badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+      </p>
+      <p class="success__title">Recebemos o seu pedido.</p>
+      <p>O lojista vai entrar em contato pelo WhatsApp informado para combinar o pagamento e a entrega.</p>
+    </div>
+    <div class="modal__foot"><button type="button" class="btn btn--gold" data-close>Fechar</button></div>
   </dialog>
 
   <!-- Legal -->
@@ -677,11 +688,11 @@ input.is-saving { opacity: .6; cursor: progress; }
       <h3>4. Hospedagem do catálogo</h3>
       <p>O catálogo de produtos (nome, preço, foto e categoria), o e-mail de recebimento de pedidos e a chave e o QR Code Pix do lojista ficam em um banco de dados do Google Firebase. Esse banco não contém dados de clientes. Ao carregar a loja, o navegador se conecta aos servidores do Google, que recebem dados técnicos de conexão, como o endereço IP.</p>
       <h3>5. Compartilhamento</h3>
-      <p>O resumo do pedido, incluindo nome, telefone, endereço de entrega, produtos e forma de pagamento, é enviado ao lojista por e-mail com a finalidade de processar a entrega. Não há venda nem compartilhamento de dados com terceiros para fins de publicidade.</p>
+      <p>O resumo do pedido, incluindo nome, telefone, endereço de entrega, produtos e forma de pagamento, é enviado automaticamente por e-mail ao lojista, por meio do serviço EmailJS, que apenas processa o envio em nome da loja, com a finalidade de processar a entrega. Nos pagamentos por crédito, débito ou Pix, o cliente é redirecionado à InfinitePay, que processa o pagamento em ambiente próprio; para criar o link de pagamento, a loja envia a ela os itens do pedido, o valor, o nome, o telefone e o endereço informados. A loja não recebe nem guarda dados de cartão. Não há venda nem compartilhamento de dados com terceiros para fins de publicidade.</p>
       <h3>6. Cookies e rastreamento</h3>
       <p>Esta loja não utiliza cookies de rastreamento nem ferramentas de análise comportamental.</p>
       <h3>7. Direitos do titular</h3>
-      <p>O titular pode solicitar confirmação de tratamento, acesso, correção e eliminação de dados pelo canal de contato do lojista. Como nome, telefone e endereço não são persistidos nesta loja, a eliminação se dá ao encerrar o pedido; cópias já enviadas por e-mail ao lojista seguem as regras dele.</p>
+      <p>O titular pode solicitar confirmação de tratamento, acesso, correção e eliminação de dados pelo canal de contato do lojista. Como nome, telefone e endereço não são persistidos nesta loja, a eliminação se dá ao encerrar o pedido; cópias já enviadas por e-mail ao lojista e mantidas pelo serviço de envio seguem as regras de cada um.</p>
       <h3>8. Alterações</h3>
       <p>Esta política pode ser atualizada. A versão vigente é sempre a publicada nesta página.</p>
     </div>
@@ -811,7 +822,8 @@ input.is-saving { opacity: .6; cursor: progress; }
         <div class="card">
           <h2>Pedidos por e-mail</h2>
           <form id="settingsForm" class="form-grid" novalidate>
-            <label class="f-full">E-mail do lojista para receber pedidos<input type="email" name="storeEmail" required></label>
+            <p class="hint f-full">Os pedidos são enviados automaticamente pelo EmailJS; o destinatário é definido no template do EmailJS. O e-mail abaixo é só uma alternativa, usada se o envio automático falhar.</p>
+            <label class="f-full">E-mail alternativo do lojista<input type="email" name="storeEmail" required></label>
             <p class="form-error f-full" id="settingsError" role="alert" hidden></p>
             <div class="f-full"><button class="btn btn--gold" type="submit">Salvar</button></div>
           </form>
@@ -843,6 +855,26 @@ input.is-saving { opacity: .6; cursor: progress; }
    * minúsculas e sobre a senha exata. */
   const ADMIN_EMAIL_HASH = "11372ab8-43c810ba-8129cbd4-5c0baa56-943a53d2-cf5d668a-150e9f55-f3073ccc";
   const ADMIN_PASS_HASH = "7a7678ae-162d72b0-6bd76b3d-4447dd32-34ce4647-88edd0ea-171832f8-0de32e92";
+
+  /* EmailJS: envio automático da notinha ao lojista.
+   * A Public Key do EmailJS é pública por definição (fica visível no navegador);
+   * o destinatário do e-mail é definido no template configurado no painel do EmailJS. */
+  const EMAILJS = {
+    serviceId: "service_lttutyl",
+    templateId: "template_usybrrj",
+    publicKey: "12lBHI542YRruwC6L",
+  };
+  const EMAIL_TIMEOUT_MS = 20000;
+
+  /* InfinitePay (Checkout Integrado): a InfiniteTag é pública (vai na URL de pagamento).
+   * Nunca coloque X-Api-Key aqui: ela só pode existir em servidor. */
+  const INFINITEPAY = {
+    endpoint: "https://api.checkout.infinitepay.io/links",
+    handle: "jose-mychael-55e",
+    timeoutMs: 20000,
+    minItemCents: 100,
+  };
+  const ONLINE_PAYMENTS = ["Crédito", "Débito", "Pix"]; // "Dinheiro" só envia a notinha
 
   /* Firebase: a configuração fica no bloco <script> do index.html */
   const FIREBASE_CONFIG = window.JMP_FIREBASE_CONFIG || {};
@@ -1403,7 +1435,6 @@ input.is-saving { opacity: .6; cursor: progress; }
     checkoutForm.reset();
     $("#checkoutError").hidden = true;
     clearFormErrors(checkoutForm);
-    renderPix();
     $("#dlgCheckout .modal__body").scrollTop = 0;
     dlgCheckout.showModal();
   }
@@ -1512,6 +1543,32 @@ input.is-saving { opacity: .6; cursor: progress; }
     ].join("\n");
   }
 
+  // Endereço em uma linha só (campo client_address do template)
+  function addressOneLine(a) {
+    return `${a.rua}, ${a.numero}${a.complemento ? ` - ${a.complemento}` : ""}, ${a.bairro}, ${a.cidade}/${a.uf}, CEP ${a.cep}`;
+  }
+
+  // Exatamente os 6 parâmetros do template do EmailJS
+  function buildEmailParams(lines, total, a, orderNsu) {
+    return {
+      client_name: a.nome,
+      client_phone: a.telefone,
+      client_address: addressOneLine(a),
+      payment_method: ONLINE_PAYMENTS.includes(a.pagamento)
+        ? `${a.pagamento} via InfinitePay - AGUARDANDO CONFIRMACAO DO PAGAMENTO - Pedido ${orderNsu}`
+        : a.pagamento,
+      order_items: lines
+        .map(({ product: p, qty }) =>
+          `${qty}x ${p.nome}${p.combo && p.comboDesc ? ` (${p.comboDesc})` : ""} - ${brl.format(p.preco)} cada - subtotal ${brl.format(p.preco * qty)}`
+        )
+        .join("\n"),
+      order_total: brl.format(total),
+    };
+  }
+
+  let pendingOrder = null;   // pedido aguardando envio (só em memória; nada é gravado)
+  let orderSending = false;  // trava de envio em andamento
+
   const orderBlock = (title, ...children) => el("section", { class: "order-block" }, [el("h3", { text: title }), ...children]);
 
   function showOrder(lines, total, a) {
@@ -1539,14 +1596,22 @@ input.is-saving { opacity: .6; cursor: progress; }
     );
 
     const text = buildOrderText(lines, total, a);
-    const to = storeEmail;
-    const subject = encodeURIComponent(`Novo pedido - JMP Men's Store - ${brl.format(total)}`);
-    const mail = $("#mailOrder");
-    mail.href = `mailto:${encodeURIComponent(to)}?subject=${subject}&body=${encodeURIComponent(text)}`;
+    const online = ONLINE_PAYMENTS.includes(a.pagamento);
+    const orderNsu = newOrderNsu();
+    pendingOrder = { lines, total, address: a, text, online, orderNsu, checkoutUrl: null, params: buildEmailParams(lines, total, a, orderNsu) };
+    setOrderError("");
 
-    $("#orderEmailHint").textContent = to
-      ? `O e-mail será aberto no seu aplicativo de e-mail, endereçado a ${to}.`
-      : "O lojista ainda não cadastrou o e-mail de recebimento. Use Copiar resumo e envie manualmente.";
+    // Alternativa se o envio automático falhar: abrir o e-mail do cliente já preenchido
+    const subject = encodeURIComponent(`Novo pedido - JMP Men's Store - ${brl.format(total)}`);
+    const fallback = $("#mailFallback");
+    fallback.href = `mailto:${encodeURIComponent(storeEmail)}?subject=${subject}&body=${encodeURIComponent(text)}`;
+    fallback.hidden = true;
+    setBusy($("#mailOrder"), false);
+    $("#mailOrder").textContent = online ? "Ir para o pagamento" : "Enviar pedido ao lojista";
+
+    $("#orderEmailHint").textContent = online
+      ? "Ao continuar, o pedido é enviado ao lojista e você é levado ao ambiente seguro da InfinitePay para concluir o pagamento."
+      : "O pedido será enviado automaticamente ao lojista. O pagamento em dinheiro é feito na entrega.";
 
     $("#copyOrder").onclick = async () => {
       try {
@@ -1562,49 +1627,260 @@ input.is-saving { opacity: .6; cursor: progress; }
     dlgOrder.showModal();
   }
 
-  /* ---------- Pix: QR Code e chave só aparecem quando "Pix" está selecionado ---------- */
-  const pixBox = $("#pixBox");
-  const selectedPayment = () => {
-    const r = $('input[name="pagamento"]:checked', checkoutForm);
-    return r ? r.value : "";
-  };
-
-  function renderPix() {
-    const isPix = selectedPayment() === "Pix";
-    pixBox.hidden = !isPix;
-    if (!isPix) return;
-    const hasKey = Boolean(pixKey);
-    const hasQr = Boolean(pixQr);
-    $("#pixQrWrap").hidden = !hasQr;
-    if (hasQr) $("#pixQrImg").src = pixQr;
-    else $("#pixQrImg").removeAttribute("src");
-    $("#pixKeyWrap").hidden = !hasKey;
-    $("#pixKeyText").textContent = pixKey;
-    $("#pixEmpty").hidden = hasKey || hasQr;
-    $("#pixTotal").textContent = brl.format(cartTotal());
+  /* ---------- Envio automático da notinha (EmailJS) ---------- */
+  function setOrderError(msg) {
+    const box = $("#orderSendError");
+    box.textContent = msg;
+    box.hidden = !msg;
   }
 
-  $$('input[name="pagamento"]', checkoutForm).forEach((radio) =>
-    radio.addEventListener("change", () => {
-      clearInvalid($("#payChoice"));
-      renderPix();
-      // No celular o QR Code abre abaixo da dobra: leva o cliente até ele
-      if (!pixBox.hidden) {
-        const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        pixBox.scrollIntoView({ block: "nearest", behavior: smooth ? "smooth" : "auto" });
-      }
-    })
-  );
+  function emailErrorMessage(error) {
+    const status = error && typeof error.status === "number" ? error.status : null;
+    if (error && error.code === "timeout") return "O serviço de e-mail não respondeu. Verifique sua conexão e tente de novo.";
+    if (status === 0 || status === null) return "Sem conexão com o serviço de e-mail. Verifique sua internet e tente de novo.";
+    if (status === 429) return "Muitos envios em pouco tempo. Aguarde um minuto e tente de novo.";
+    if (status >= 500) return "O serviço de e-mail está instável. Tente de novo em instantes.";
+    return `O serviço de e-mail recusou o envio (código ${status}). Use as opções abaixo ou avise o lojista.`;
+  }
 
-  $("#pixCopy").addEventListener("click", async () => {
+  function showSendFailure(message) {
+    setOrderError(`${message} Seu carrinho foi mantido.`);
+    const fallback = $("#mailFallback");
+    fallback.hidden = !storeEmail; // sem e-mail cadastrado, resta o botão Copiar resumo
+    // No celular o erro nasce abaixo da dobra: leva o cliente até ele
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("#orderSendError").scrollIntoView({ block: "nearest", behavior: smooth ? "smooth" : "auto" });
+  }
+
+  /* ---------- InfinitePay: criação do link de checkout ---------- */
+  class PaymentError extends Error {
+    constructor(message, status = null) {
+      super(message);
+      this.name = "PaymentError";
+      this.status = status;
+    }
+  }
+
+  // Identificador do pedido (order_nsu): único, só letras, números e hífen
+  function newOrderNsu() {
+    const rand = window.crypto && crypto.getRandomValues ? crypto.getRandomValues(new Uint32Array(1))[0] : Math.floor(Math.random() * 4294967296);
+    return `jmp-${Date.now().toString(36)}-${rand.toString(36)}`;
+  }
+
+  const toCents = (value) => Math.round(Number(value) * 100);
+
+  function buildInfinitePayBody(order, full) {
+    const a = order.address;
+    const body = {
+      handle: INFINITEPAY.handle,
+      order_nsu: order.orderNsu,
+      items: order.lines.map(({ product: p, qty }) => ({
+        quantity: qty,
+        price: toCents(p.preco), // centavos, inteiro: R$ 100,00 = 10000
+        description: String(p.nome).slice(0, 120),
+      })),
+    };
+    if (/^https?:$/.test(location.protocol)) {
+      body.redirect_url = `${location.origin}${location.pathname}`;
+    }
+    if (full) {
+      body.customer = { name: a.nome, phone_number: `+55${a.telefone.replace(/\D/g, "")}` };
+      body.address = {
+        cep: a.cep.replace(/\D/g, ""),
+        street: a.rua,
+        number: a.numero,
+        neighborhood: a.bairro,
+        city: a.cidade,
+        state: a.uf,
+        ...(a.complemento ? { complement: a.complemento } : {}),
+      };
+    }
+    return body;
+  }
+
+  // Só aceita https em domínio da InfinitePay (evita redirecionar para destino inesperado)
+  function safeCheckoutUrl(value) {
+    if (typeof value !== "string") return "";
     try {
-      await navigator.clipboard.writeText(pixKey);
-      toast("Chave Pix copiada.");
-    } catch (err) {
-      console.error("[clipboard]", err);
-      toast("Não foi possível copiar. Selecione a chave e copie manualmente.", "error");
+      const u = new URL(value);
+      const okHost = u.hostname === "infinitepay.io" || u.hostname.endsWith(".infinitepay.io");
+      return u.protocol === "https:" && okHost ? u.href : "";
+    } catch {
+      return "";
+    }
+  }
+
+  // O formato da resposta não é documentado: tenta os nomes prováveis e, por fim, qualquer URL válida no JSON
+  function extractCheckoutUrl(data) {
+    if (!data || typeof data !== "object") return "";
+    for (const key of ["url", "checkout_url", "checkoutUrl", "link", "checkout_link", "payment_url", "payment_link"]) {
+      const ok = safeCheckoutUrl(data[key]);
+      if (ok) return ok;
+    }
+    for (const value of Object.values(data)) {
+      const ok = safeCheckoutUrl(value) || (value && typeof value === "object" && !Array.isArray(value) ? extractCheckoutUrl(value) : "");
+      if (ok) return ok;
+    }
+    return "";
+  }
+
+  async function postInfinitePay(body) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), INFINITEPAY.timeoutMs);
+    let res;
+    try {
+      res = await fetch(INFINITEPAY.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") throw new PaymentError("timeout");
+      throw new PaymentError("network"); // sem internet ou bloqueio de CORS
+    } finally {
+      clearTimeout(timer);
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* corpo não-JSON */ }
+    if (!res.ok) throw new PaymentError("http", res.status);
+    return data;
+  }
+
+  async function createCheckoutLink(order) {
+    const tooLow = order.lines.find(({ product: p }) => toCents(p.preco) < INFINITEPAY.minItemCents);
+    if (tooLow) throw new PaymentError("min", null);
+    let data;
+    try {
+      data = await postInfinitePay(buildInfinitePayBody(order, true));
+    } catch (error) {
+      // Dados opcionais recusados (validação): tenta uma vez só com o essencial
+      if (error instanceof PaymentError && error.message === "http" && (error.status === 400 || error.status === 422)) {
+        data = await postInfinitePay(buildInfinitePayBody(order, false));
+      } else {
+        throw error;
+      }
+    }
+    const url = extractCheckoutUrl(data);
+    if (!url) throw new PaymentError("no-link");
+    return url;
+  }
+
+  function paymentErrorMessage(error) {
+    if (!(error instanceof PaymentError)) return "Não foi possível iniciar o pagamento. Tente de novo.";
+    switch (error.message) {
+      case "timeout": return "O pagamento demorou para responder. Verifique sua conexão e tente de novo.";
+      case "network": return "Não foi possível conectar ao pagamento. Verifique sua internet e tente de novo.";
+      case "min": return "Há um item com valor abaixo do mínimo aceito para pagamento online (R$ 1,00).";
+      case "no-link": return "O pagamento não devolveu um link válido. Tente de novo ou fale com o lojista.";
+      default: return error.status === 429
+        ? "Muitas tentativas em pouco tempo. Aguarde um minuto e tente de novo."
+        : `O pagamento recusou o pedido (código ${error.status}). Tente de novo ou fale com o lojista.`;
+    }
+  }
+
+  function setBusyLabel(btn, label) {
+    const span = btn.querySelector("span:last-child");
+    if (span) span.textContent = label;
+  }
+
+  function releaseOrderUi() {
+    orderSending = false;
+    setBusy($("#mailOrder"), false);
+    $("#copyOrder").disabled = false;
+    $("#dlgOrder .icon-btn").disabled = false;
+  }
+
+  /* Fluxo: (1) cria o link na InfinitePay, (2) envia a notinha pelo EmailJS,
+   * (3) só então redireciona. Falha no passo 1 ou 2 não redireciona nem esvazia o carrinho.
+   * O link criado fica guardado em pendingOrder para o "tentar de novo" não gerar outro. */
+  async function sendOrder() {
+    if (!pendingOrder || orderSending) return;
+    const btn = $("#mailOrder");
+    const order = pendingOrder;
+    setOrderError("");
+
+    if (!window.emailjs || typeof window.emailjs.send !== "function") {
+      console.error("[emailjs] SDK não carregou");
+      showSendFailure("O serviço de envio não carregou (bloqueador de anúncios ou conexão).");
+      return;
+    }
+
+    orderSending = true;
+    setBusy(btn, true, order.online ? "Gerando pagamento..." : "Enviando pedido...");
+    $("#copyOrder").disabled = true;
+    $("#dlgOrder .icon-btn").disabled = true;
+
+    try {
+      if (order.online && !order.checkoutUrl) {
+        try {
+          order.checkoutUrl = await createCheckoutLink(order);
+        } catch (error) {
+          console.error("[infinitepay]", error);
+          showSendFailure(paymentErrorMessage(error));
+          releaseOrderUi();
+          return;
+        }
+        setBusyLabel(btn, "Enviando pedido...");
+      }
+
+      try {
+        await withTimeout(
+          window.emailjs.send(EMAILJS.serviceId, EMAILJS.templateId, order.params, EMAILJS.publicKey),
+          EMAIL_TIMEOUT_MS
+        );
+      } catch (error) {
+        console.error("[emailjs]", error);
+        showSendFailure(emailErrorMessage(error));
+        releaseOrderUi();
+        return;
+      }
+    } catch (error) {
+      console.error("[checkout]", error);
+      showSendFailure("Ocorreu um erro inesperado. Tente de novo.");
+      releaseOrderUi();
+      return;
+    }
+
+    // Notinha enviada: o pedido está registrado, então o carrinho pode ser esvaziado
+    pendingOrder = null;
+    cart = [];
+    saveCart();
+    renderCart();
+    checkoutForm.reset();
+
+    if (order.online) {
+      setBusyLabel(btn, "Redirecionando...");
+      window.location.assign(order.checkoutUrl); // orderSending segue true: o modal fica travado até sair da página
+      return;
+    }
+    releaseOrderUi();
+    dlgOrder.close();
+    $("#dlgSuccess").showModal();
+  }
+
+  // Voltar pelo botão do navegador (cache de página) não pode deixar o modal travado
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted && orderSending) {
+      releaseOrderUi();
+      if (dlgOrder.open) dlgOrder.close();
     }
   });
+
+  // Retorno do checkout da InfinitePay (redirect_url): só agradece, não prova pagamento
+  (() => {
+    const q = new URLSearchParams(location.search);
+    if (!q.has("order_nsu") || !(q.has("receipt_url") || q.has("transaction_nsu") || q.has("slug"))) return;
+    history.replaceState(null, "", location.pathname + location.hash);
+    setTimeout(() => toast("Obrigado! O lojista vai confirmar o seu pagamento e combinar a entrega."), 600);
+  })();
+
+  $("#mailOrder").addEventListener("click", sendOrder);
+  dlgOrder.addEventListener("cancel", (e) => { if (orderSending) e.preventDefault(); }); // Esc não fecha durante o envio
+
+  $$('input[name="pagamento"]', checkoutForm).forEach((radio) =>
+    radio.addEventListener("change", () => clearInvalid($("#payChoice")))
+  );
 
   checkoutForm.elements.cep.addEventListener("input", (e) => {
     e.target.value = formatCep(e.target.value);
@@ -1641,11 +1917,8 @@ input.is-saving { opacity: .6; cursor: progress; }
     errBox.hidden = true;
     dlgCheckout.close();
     showOrder(lines, total, address);
-
-    // Pedido concluído: limpa carrinho; o endereço não foi gravado em lugar nenhum.
-    cart = [];
-    saveCart();
-    renderCart();
+    // O carrinho só é esvaziado depois que o envio do pedido for confirmado (sendOrder).
+    // Nome, telefone e endereço ficam apenas em memória.
     checkoutForm.reset();
   });
 
@@ -1657,6 +1930,7 @@ input.is-saving { opacity: .6; cursor: progress; }
   );
   $$("dialog").forEach((dlg) => {
     dlg.addEventListener("click", (e) => {
+      if (dlg.id === "dlgOrder" && orderSending) return; // envio em andamento
       if (e.target === dlg) dlg.close();
       if (e.target.closest("[data-close]")) dlg.close();
     });
@@ -2292,8 +2566,7 @@ input.is-saving { opacity: .6; cursor: progress; }
       const field = $("#settingsForm").elements.storeEmail;
       if (isLogged() && document.activeElement !== field) field.value = storeEmail;
       if (isLogged()) renderPixAdmin();
-      renderPix();
-    }, (error) => console.error("[settings]", error));
+      }, (error) => console.error("[settings]", error));
   }
 
   /* ---------- Migração do catálogo antigo (localStorage) para a nuvem ---------- */

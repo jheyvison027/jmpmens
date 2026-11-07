@@ -1,18 +1,38 @@
 (() => {
   "use strict";
-
+ 
   /* Credenciais do lojista: apenas hashes, nunca texto puro.
    * Gerados com customHash() (definida mais abaixo) sobre o e-mail em
    * minúsculas e sobre a senha exata. */
   const ADMIN_EMAIL_HASH = "11372ab8-43c810ba-8129cbd4-5c0baa56-943a53d2-cf5d668a-150e9f55-f3073ccc";
   const ADMIN_PASS_HASH = "7a7678ae-162d72b0-6bd76b3d-4447dd32-34ce4647-88edd0ea-171832f8-0de32e92";
-
+ 
+  /* EmailJS: envio automático da notinha ao lojista.
+   * A Public Key do EmailJS é pública por definição (fica visível no navegador);
+   * o destinatário do e-mail é definido no template configurado no painel do EmailJS. */
+  const EMAILJS = {
+    serviceId: "service_lttutyl",
+    templateId: "template_usybrrj",
+    publicKey: "12lBHI542YRruwC6L",
+  };
+  const EMAIL_TIMEOUT_MS = 20000;
+ 
+  /* InfinitePay (Checkout Integrado): a InfiniteTag é pública (vai na URL de pagamento).
+   * Nunca coloque X-Api-Key aqui: ela só pode existir em servidor. */
+  const INFINITEPAY = {
+    endpoint: "https://api.checkout.infinitepay.io/links",
+    handle: "jose-mychael-55e",
+    timeoutMs: 20000,
+    minItemCents: 100,
+  };
+  const ONLINE_PAYMENTS = ["Crédito", "Débito", "Pix"]; // "Dinheiro" só envia a notinha
+ 
   /* Firebase: a configuração fica no bloco <script> do index.html */
   const FIREBASE_CONFIG = window.JMP_FIREBASE_CONFIG || {};
   const CONFIG_OK = ["apiKey", "projectId", "appId"].every(
     (k) => typeof FIREBASE_CONFIG[k] === "string" && FIREBASE_CONFIG[k] && !FIREBASE_CONFIG[k].startsWith("COLE_")
   );
-
+ 
   /* ============================================================
    * Constantes e utilitários
    * ============================================================ */
@@ -20,7 +40,7 @@
     cart: "jmp.cart.v1",
   };
   const LEGACY_PRODUCTS_KEY = "jmp.products.v1"; // catálogo antigo, só para migração
-
+ 
   const CATEGORIES = [
     { id: "todos", label: "Todos" },
     { id: "camisa", label: "Camisas" },
@@ -29,12 +49,12 @@
     { id: "bone", label: "Bonés" },
     { id: "acessorio", label: "Acessórios" },
   ];
-
+ 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
+ 
   const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-
+ 
   const storage = {
     get(key, fallback) {
       try {
@@ -56,10 +76,10 @@
       }
     },
   };
-
+ 
   const uid = () =>
     (crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-
+ 
   function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(props)) {
@@ -73,20 +93,20 @@
     }
     return node;
   }
-
+ 
   /* Máscara monetária (BRL) preenchida da direita para a esquerda:
    * só os dígitos importam, e os dois últimos são os centavos. 23500 -> R$ 235,00 */
   const MAX_PRICE_DIGITS = 7; // R$ 99.999,99, o teto aceito pelas regras do Firestore
-
+ 
   function maskPrice(input) {
     const digits = input.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, MAX_PRICE_DIGITS);
     input.value = digits ? brl.format(parseInt(digits, 10) / 100) : "";
   }
-
+ 
   function attachPriceMask(input) {
     input.addEventListener("input", () => maskPrice(input));
   }
-
+ 
   // Valor numérico (reais) a partir do campo mascarado; NaN se vazio ou zero.
   function maskedToNumber(value) {
     const digits = String(value).replace(/\D/g, "");
@@ -94,9 +114,9 @@
     const reais = parseInt(digits, 10) / 100;
     return reais > 0 ? reais : NaN;
   }
-
+ 
   const DATA_IMAGE_RE = /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+=*$/;
-
+ 
   function safeImageUrl(url) {
     if (!url) return "";
     if (url.startsWith("data:")) return DATA_IMAGE_RE.test(url) ? url : "";
@@ -107,7 +127,7 @@
       return "";
     }
   }
-
+ 
   let toastTimer;
   function toast(msg, kind = "info") {
     const t = $("#toast");
@@ -117,7 +137,7 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (t.hidden = true), kind === "error" ? 5200 : 3200);
   }
-
+ 
   /* Botão em processamento: spinner + desabilitado (impede clique duplo) */
   function setBusy(btn, busy, label = "Salvando...") {
     if (!btn) return;
@@ -137,11 +157,11 @@
       if (btn.dataset.label) btn.textContent = btn.dataset.label;
     }
   }
-
+ 
   /* Erros por campo: borda vermelha, mensagem abaixo do campo e aria-invalid */
   let fieldErrorSeq = 0;
   const fieldHost = (input) => (input.matches("fieldset") ? input : input.closest("label") || input.parentElement);
-
+ 
   function markInvalid(input, message) {
     if (!input) return;
     const host = fieldHost(input);
@@ -155,7 +175,7 @@
     input.setAttribute("aria-invalid", "true");
     input.setAttribute("aria-describedby", msg.id);
   }
-
+ 
   function clearInvalid(input) {
     if (!input || !input.classList) return;
     input.classList.remove("invalid");
@@ -165,9 +185,9 @@
     const msg = host && host.querySelector(".field-error");
     if (msg) msg.remove();
   }
-
+ 
   const clearFormErrors = (form) => $$('[aria-invalid="true"]', form).forEach(clearInvalid);
-
+ 
   function focusFirstInvalid(form) {
     const first = $('[aria-invalid="true"]', form);
     if (first) {
@@ -175,16 +195,16 @@
       first.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
-
+ 
   // O erro some assim que o usuário volta a editar o campo
   function watchFormErrors(form) {
     form.addEventListener("input", (e) => {
       if (e.target.getAttribute && e.target.getAttribute("aria-invalid") === "true") clearInvalid(e.target);
     });
   }
-
+ 
   const normalizeText = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-
+ 
   function debounce(fn, ms) {
     let timer;
     return (...args) => {
@@ -192,7 +212,7 @@
       timer = setTimeout(() => fn(...args), ms);
     };
   }
-
+ 
   /* ============================================================
    * Hash customizado (substituição por tabela de chaves + mistura)
    * Cada caractere é codificado com uma chave da tabela derivada da
@@ -209,16 +229,16 @@
     }
     return table;
   })();
-
+ 
   const rotl = (x, n) => ((x << n) | (x >>> (32 - n))) >>> 0;
-
+ 
   function customHash(input) {
     const state = [
       0x4a4d5021, 0x43524f57, 0x474f4c44, 0x53544f52,
       0x4d454e53, 0x4c555845, 0x4b494e47, 0x50524d31,
     ];
     const chars = [...String(input)];
-
+ 
     chars.forEach((ch, i) => {
       const code = ch.codePointAt(0);
       const key = KEY_TABLE[(code * 7 + i * 13) % 64];
@@ -227,9 +247,9 @@
       state[slot] = rotl((state[slot] ^ encoded) >>> 0, (code % 23) + 1);
       state[(slot + 3) % 8] = (state[(slot + 3) % 8] + encoded) >>> 0;
     });
-
+ 
     state[0] = (state[0] ^ chars.length) >>> 0;
-
+ 
     for (let round = 0; round < 16; round++) {
       for (let j = 0; j < 8; j++) {
         const next = (j + 1) % 8;
@@ -238,10 +258,10 @@
         state[next] = (state[next] + state[j]) >>> 0;
       }
     }
-
+ 
     return state.map((n) => n.toString(16).padStart(8, "0")).join("-");
   }
-
+ 
   /* ============================================================
    * Imagens neutras (sem fotos geradas)
    * Placeholder de silhueta; o lojista troca pela foto real via URL.
@@ -254,7 +274,7 @@
     acessorio: "M82 28 H118 L122 62 A44 44 0 1 1 78 62 Z M100 82 V108 L116 118",
     combo: "M30 70 L48 62 Q58 72 68 62 L86 70 L100 90 L88 98 L82 92 L82 150 L40 150 L40 92 L34 98 L22 90 Z M112 120 Q112 86 140 86 Q168 86 168 120 L186 126 Q160 132 140 128 L112 128 Z",
   };
-
+ 
   function placeholderImage(category, isCombo) {
     const shape = SHAPES[isCombo ? "combo" : category] || SHAPES.acessorio;
     const svg =
@@ -264,12 +284,12 @@
       `</svg>`;
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   }
-
+ 
   /* ============================================================
    * Estado: catálogo (vem da nuvem) e carrinho (local de cada visitante)
    * ============================================================ */
   const CATEGORY_IDS = CATEGORIES.map((c) => c.id).filter((id) => id !== "todos");
-
+ 
   let products = [];
   let catalogReady = false;    // true após o primeiro retorno do Firestore
   let storeEmail = "";         // e-mail do lojista que recebe pedidos (vem da nuvem)
@@ -279,14 +299,14 @@
   let auth = null;
   let db = null;
   let persistenceReady = Promise.resolve();
-
+ 
   let cart = storage.get(LS.cart, []);
   if (!Array.isArray(cart)) cart = [];
-
+ 
   const saveCart = () => storage.set(LS.cart, cart);
   const imageFor = (p) => safeImageUrl(p.imagem) || placeholderImage(p.categoria, p.combo);
   const findProduct = (id) => products.find((p) => p.id === id);
-
+ 
   /* ============================================================
    * Animações de entrada (IntersectionObserver)
    * ============================================================ */
@@ -303,13 +323,13 @@
         { threshold: 0.12 }
       )
     : null;
-
+ 
   function observeReveal(node, index) {
     node.style.transitionDelay = `${(index % 4) * 90}ms`;
     if (revealObserver) revealObserver.observe(node);
     else node.classList.add("is-visible");
   }
-
+ 
   /* ============================================================
    * Catálogo
    * ============================================================ */
@@ -318,15 +338,15 @@
   let searchTerm = "";          // busca normalizada (sem acento, minúscula)
   let sortMode = "recentes";
   let catalogLoading = false;   // true enquanto aguarda o primeiro retorno do Firestore
-
+ 
   const SORTERS = {
     recentes: (a, b) => b.createdAt - a.createdAt,
     menor: (a, b) => a.preco - b.preco || b.createdAt - a.createdAt,
     maior: (a, b) => b.preco - a.preco || b.createdAt - a.createdAt,
   };
-
+ 
   const matchesSearch = (p) => !searchTerm || normalizeText(`${p.nome} ${p.comboDesc}`).includes(searchTerm);
-
+ 
   function skeletonCard() {
     return el("div", { class: "product skeleton is-visible", "aria-hidden": "true" }, [
       el("div", { class: "sk sk-media" }),
@@ -338,23 +358,23 @@
       ]),
     ]);
   }
-
+ 
   function productCard(p, index) {
     const img = el("img", { src: imageFor(p), alt: p.nome, loading: "lazy", width: "400", height: "500" });
     img.addEventListener("error", () => {
       img.src = placeholderImage(p.categoria, p.combo);
     }, { once: true });
-
+ 
     const tags = [
       p.promo ? el("span", { class: "promo-tag", text: "Promoção" }) : null,
       p.combo ? el("span", { class: "combo-tag", text: "Super Combo" }) : null,
     ].filter(Boolean);
-
+ 
     const media = el("div", { class: "product__media" }, [
       tags.length ? el("div", { class: "product__tags" }, tags) : null,
       img,
     ]);
-
+ 
     const body = el("div", { class: "product__body" }, [
       el("h3", { class: "product__name", text: p.nome }),
       p.combo && p.comboDesc ? el("p", { class: "product__desc", text: p.comboDesc }) : null,
@@ -366,7 +386,7 @@
         onclick: () => addToCart(p.id),
       }),
     ]);
-
+ 
     const card = el("article", {
       class: `product${p.combo ? " product--combo" : ""}${p.promo ? " product--promo" : ""}`,
     }, [media, body]);
@@ -374,7 +394,7 @@
     else observeReveal(card, index);
     return card;
   }
-
+ 
   function renderFilters() {
     const wrap = $("#filters");
     wrap.replaceChildren(
@@ -393,11 +413,11 @@
       )
     );
   }
-
+ 
   function renderCatalog() {
     const grid = $("#productGrid");
     const emptyMsg = $("#emptyMsg");
-
+ 
     // Enquanto o Firestore não responde: esqueleto dos cards em vez de tela vazia
     if (catalogLoading && !catalogReady) {
       $("#promocoes").hidden = true;
@@ -408,7 +428,7 @@
       return;
     }
     grid.removeAttribute("aria-busy");
-
+ 
     // Busca e ordenação valem para promoções, combos e coleção; a categoria só para a coleção
     const sorter = SORTERS[sortMode] || SORTERS.recentes;
     const found = products.filter(matchesSearch);
@@ -417,13 +437,13 @@
     const regular = found
       .filter((p) => !p.promo && !p.combo && (activeCategory === "todos" || p.categoria === activeCategory))
       .sort(sorter);
-
+ 
     $("#promocoes").hidden = promos.length === 0;
     $("#promoGrid").replaceChildren(...promos.map(productCard));
     $("#combos").hidden = combos.length === 0;
     $("#comboGrid").replaceChildren(...combos.map(productCard));
     grid.replaceChildren(...regular.map(productCard));
-
+ 
     let msg = "";
     if (products.length === 0) msg = "Nenhum produto cadastrado ainda.";
     else if (searchTerm && !promos.length && !combos.length && !regular.length) msg = `Nenhum produto encontrado para "${searchRaw}".`;
@@ -434,27 +454,27 @@
     emptyMsg.textContent = msg;
     emptyMsg.hidden = !catalogReady || !msg;
   }
-
+ 
   /* ============================================================
    * Carrinho
    * ============================================================ */
   const drawer = $("#drawer");
   const overlay = $("#overlay");
-
+ 
   function cartCount() {
     return cart.reduce((sum, i) => sum + i.qty, 0);
   }
-
+ 
   function cartLines() {
     return cart
       .map((i) => ({ product: findProduct(i.id), qty: i.qty }))
       .filter((l) => l.product);
   }
-
+ 
   function cartTotal() {
     return cartLines().reduce((sum, l) => sum + l.product.preco * l.qty, 0);
   }
-
+ 
   function addToCart(id) {
     const item = cart.find((i) => i.id === id);
     if (item) item.qty += 1;
@@ -464,7 +484,7 @@
     bumpCart();
     toast("Item adicionado ao carrinho.");
   }
-
+ 
   function bumpCart() {
     const btn = $("#cartBtn");
     const badge = $("#cartBadge");
@@ -475,7 +495,7 @@
     btn.classList.add("bump");
     badge.classList.add("pulse");
   }
-
+ 
   function changeQty(id, delta) {
     const item = cart.find((i) => i.id === id);
     if (!item) return;
@@ -484,13 +504,13 @@
     saveCart();
     renderCart();
   }
-
+ 
   function removeFromCart(id) {
     cart = cart.filter((i) => i.id !== id);
     saveCart();
     renderCart();
   }
-
+ 
   function renderCart() {
     // Remove do carrinho itens cujo produto foi excluído pelo lojista.
     // Só depois do primeiro retorno da nuvem, senão o carrinho seria apagado no carregamento.
@@ -501,15 +521,15 @@
         saveCart();
       }
     }
-
+ 
     const count = cartCount();
     const badge = $("#cartBadge");
     badge.textContent = String(count);
     badge.hidden = count === 0;
-
+ 
     const body = $("#cartItems");
     const lines = cartLines();
-
+ 
     if (!lines.length) {
       body.replaceChildren(el("p", { class: "cart-empty", text: "Seu carrinho está vazio." }));
     } else {
@@ -533,24 +553,24 @@
         })
       );
     }
-
+ 
     $("#cartTotal").textContent = brl.format(cartTotal());
     $("#checkoutBtn").disabled = lines.length === 0;
   }
-
+ 
   function openCart() {
     overlay.hidden = false;
     drawer.classList.add("is-open");
     drawer.setAttribute("aria-hidden", "false");
     $("#closeCart").focus();
   }
-
+ 
   function closeCart() {
     drawer.classList.remove("is-open");
     drawer.setAttribute("aria-hidden", "true");
     overlay.hidden = true;
   }
-
+ 
   /* ============================================================
    * Checkout e resumo do pedido
    * O endereço vive só em memória (variável local) e é descartado.
@@ -559,23 +579,22 @@
   const dlgOrder = $("#dlgOrder");
   const checkoutForm = $("#checkoutForm");
   watchFormErrors(checkoutForm);
-
+ 
   function openCheckout() {
     if (!cartLines().length) return;
     closeCart();
     checkoutForm.reset();
     $("#checkoutError").hidden = true;
     clearFormErrors(checkoutForm);
-    renderPix();
     $("#dlgCheckout .modal__body").scrollTop = 0;
     dlgCheckout.showModal();
   }
-
+ 
   function formatCep(value) {
     const d = value.replace(/\D/g, "").slice(0, 8);
     return d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
   }
-
+ 
   function formatPhone(value) {
     const d = value.replace(/\D/g, "").slice(0, 11);
     if (d.length === 0) return "";
@@ -584,7 +603,7 @@
     if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
     return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   }
-
+ 
   // DDD válido (11 a 99) + 8 dígitos começando em 2 a 5 (fixo) ou 9 dígitos começando em 9 (celular)
   function isValidPhone(value) {
     const d = value.replace(/\D/g, "");
@@ -592,9 +611,9 @@
     if (!/^[1-9][1-9]$/.test(d.slice(0, 2))) return false;
     return d.length === 10 ? /^[2-5]$/.test(d[2]) : d[2] === "9";
   }
-
+ 
   const PAYMENT_METHODS = ["Crédito", "Débito", "Pix", "Dinheiro"];
-
+ 
   function readAddress(form) {
     const data = Object.fromEntries(new FormData(form).entries());
     const clean = (v) => String(v || "").trim().replace(/\s+/g, " ");
@@ -611,7 +630,7 @@
       pagamento: PAYMENT_METHODS.includes(data.pagamento) ? data.pagamento : "",
     };
   }
-
+ 
   const ADDRESS_MESSAGES = {
     nome: "Informe nome e sobrenome.",
     telefone: "Telefone inválido. Use DDD + número, ex.: (11) 91234-5678.",
@@ -623,7 +642,7 @@
     uf: "Use a sigla do estado, ex.: SP.",
     pagamento: "Escolha uma forma de pagamento.",
   };
-
+ 
   function validateAddress(a) {
     const errors = [];
     if (a.nome.length < 3) errors.push("nome");
@@ -637,7 +656,7 @@
     if (!a.pagamento) errors.push("pagamento");
     return errors;
   }
-
+ 
   // Endereço completo (o nome do cliente aparece à parte, na seção Cliente)
   function addressText(a) {
     return [
@@ -646,7 +665,7 @@
       `CEP ${a.cep}`,
     ].join("\n");
   }
-
+ 
   // Notinha do lojista: cliente, telefone, endereço, produtos, pagamento e total
   function buildOrderText(lines, total, a) {
     const items = lines.map(({ product: p, qty }, i) =>
@@ -674,9 +693,35 @@
       `VALOR TOTAL: ${brl.format(total)}`,
     ].join("\n");
   }
-
+ 
+  // Endereço em uma linha só (campo client_address do template)
+  function addressOneLine(a) {
+    return `${a.rua}, ${a.numero}${a.complemento ? ` - ${a.complemento}` : ""}, ${a.bairro}, ${a.cidade}/${a.uf}, CEP ${a.cep}`;
+  }
+ 
+  // Exatamente os 6 parâmetros do template do EmailJS
+  function buildEmailParams(lines, total, a, orderNsu) {
+    return {
+      client_name: a.nome,
+      client_phone: a.telefone,
+      client_address: addressOneLine(a),
+      payment_method: ONLINE_PAYMENTS.includes(a.pagamento)
+        ? `${a.pagamento} via InfinitePay - AGUARDANDO CONFIRMACAO DO PAGAMENTO - Pedido ${orderNsu}`
+        : a.pagamento,
+      order_items: lines
+        .map(({ product: p, qty }) =>
+          `${qty}x ${p.nome}${p.combo && p.comboDesc ? ` (${p.comboDesc})` : ""} - ${brl.format(p.preco)} cada - subtotal ${brl.format(p.preco * qty)}`
+        )
+        .join("\n"),
+      order_total: brl.format(total),
+    };
+  }
+ 
+  let pendingOrder = null;   // pedido aguardando envio (só em memória; nada é gravado)
+  let orderSending = false;  // trava de envio em andamento
+ 
   const orderBlock = (title, ...children) => el("section", { class: "order-block" }, [el("h3", { text: title }), ...children]);
-
+ 
   function showOrder(lines, total, a) {
     const summary = $("#orderSummary");
     summary.replaceChildren(
@@ -700,17 +745,25 @@
       orderBlock("Forma de pagamento", el("p", { class: "order-pay", text: a.pagamento })),
       el("div", { class: "order-total" }, [el("span", { text: "Valor total" }), el("strong", { text: brl.format(total) })])
     );
-
+ 
     const text = buildOrderText(lines, total, a);
-    const to = storeEmail;
+    const online = ONLINE_PAYMENTS.includes(a.pagamento);
+    const orderNsu = newOrderNsu();
+    pendingOrder = { lines, total, address: a, text, online, orderNsu, checkoutUrl: null, params: buildEmailParams(lines, total, a, orderNsu) };
+    setOrderError("");
+ 
+    // Alternativa se o envio automático falhar: abrir o e-mail do cliente já preenchido
     const subject = encodeURIComponent(`Novo pedido - JMP Men's Store - ${brl.format(total)}`);
-    const mail = $("#mailOrder");
-    mail.href = `mailto:${encodeURIComponent(to)}?subject=${subject}&body=${encodeURIComponent(text)}`;
-
-    $("#orderEmailHint").textContent = to
-      ? `O e-mail será aberto no seu aplicativo de e-mail, endereçado a ${to}.`
-      : "O lojista ainda não cadastrou o e-mail de recebimento. Use Copiar resumo e envie manualmente.";
-
+    const fallback = $("#mailFallback");
+    fallback.href = `mailto:${encodeURIComponent(storeEmail)}?subject=${subject}&body=${encodeURIComponent(text)}`;
+    fallback.hidden = true;
+    setBusy($("#mailOrder"), false);
+    $("#mailOrder").textContent = online ? "Ir para o pagamento" : "Enviar pedido ao lojista";
+ 
+    $("#orderEmailHint").textContent = online
+      ? "Ao continuar, o pedido é enviado ao lojista e você é levado ao ambiente seguro da InfinitePay para concluir o pagamento."
+      : "O pedido será enviado automaticamente ao lojista. O pagamento em dinheiro é feito na entrega.";
+ 
     $("#copyOrder").onclick = async () => {
       try {
         await navigator.clipboard.writeText(text);
@@ -720,55 +773,266 @@
         toast("Não foi possível copiar automaticamente.", "error");
       }
     };
-
+ 
     $("#dlgOrder .modal__body").scrollTop = 0;
     dlgOrder.showModal();
   }
-
-  /* ---------- Pix: QR Code e chave só aparecem quando "Pix" está selecionado ---------- */
-  const pixBox = $("#pixBox");
-  const selectedPayment = () => {
-    const r = $('input[name="pagamento"]:checked', checkoutForm);
-    return r ? r.value : "";
-  };
-
-  function renderPix() {
-    const isPix = selectedPayment() === "Pix";
-    pixBox.hidden = !isPix;
-    if (!isPix) return;
-    const hasKey = Boolean(pixKey);
-    const hasQr = Boolean(pixQr);
-    $("#pixQrWrap").hidden = !hasQr;
-    if (hasQr) $("#pixQrImg").src = pixQr;
-    else $("#pixQrImg").removeAttribute("src");
-    $("#pixKeyWrap").hidden = !hasKey;
-    $("#pixKeyText").textContent = pixKey;
-    $("#pixEmpty").hidden = hasKey || hasQr;
-    $("#pixTotal").textContent = brl.format(cartTotal());
+ 
+  /* ---------- Envio automático da notinha (EmailJS) ---------- */
+  function setOrderError(msg) {
+    const box = $("#orderSendError");
+    box.textContent = msg;
+    box.hidden = !msg;
   }
-
-  $$('input[name="pagamento"]', checkoutForm).forEach((radio) =>
-    radio.addEventListener("change", () => {
-      clearInvalid($("#payChoice"));
-      renderPix();
-      // No celular o QR Code abre abaixo da dobra: leva o cliente até ele
-      if (!pixBox.hidden) {
-        const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        pixBox.scrollIntoView({ block: "nearest", behavior: smooth ? "smooth" : "auto" });
-      }
-    })
-  );
-
-  $("#pixCopy").addEventListener("click", async () => {
+ 
+  function emailErrorMessage(error) {
+    const status = error && typeof error.status === "number" ? error.status : null;
+    if (error && error.code === "timeout") return "O serviço de e-mail não respondeu. Verifique sua conexão e tente de novo.";
+    if (status === 0 || status === null) return "Sem conexão com o serviço de e-mail. Verifique sua internet e tente de novo.";
+    if (status === 429) return "Muitos envios em pouco tempo. Aguarde um minuto e tente de novo.";
+    if (status >= 500) return "O serviço de e-mail está instável. Tente de novo em instantes.";
+    return `O serviço de e-mail recusou o envio (código ${status}). Use as opções abaixo ou avise o lojista.`;
+  }
+ 
+  function showSendFailure(message) {
+    setOrderError(`${message} Seu carrinho foi mantido.`);
+    const fallback = $("#mailFallback");
+    fallback.hidden = !storeEmail; // sem e-mail cadastrado, resta o botão Copiar resumo
+    // No celular o erro nasce abaixo da dobra: leva o cliente até ele
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("#orderSendError").scrollIntoView({ block: "nearest", behavior: smooth ? "smooth" : "auto" });
+  }
+ 
+  /* ---------- InfinitePay: criação do link de checkout ---------- */
+  class PaymentError extends Error {
+    constructor(message, status = null) {
+      super(message);
+      this.name = "PaymentError";
+      this.status = status;
+    }
+  }
+ 
+  // Identificador do pedido (order_nsu): único, só letras, números e hífen
+  function newOrderNsu() {
+    const rand = window.crypto && crypto.getRandomValues ? crypto.getRandomValues(new Uint32Array(1))[0] : Math.floor(Math.random() * 4294967296);
+    return `jmp-${Date.now().toString(36)}-${rand.toString(36)}`;
+  }
+ 
+  const toCents = (value) => Math.round(Number(value) * 100);
+ 
+  function buildInfinitePayBody(order, full) {
+    const a = order.address;
+    const body = {
+      handle: INFINITEPAY.handle,
+      order_nsu: order.orderNsu,
+      items: order.lines.map(({ product: p, qty }) => ({
+        quantity: qty,
+        price: toCents(p.preco), // centavos, inteiro: R$ 100,00 = 10000
+        description: String(p.nome).slice(0, 120),
+      })),
+    };
+    if (/^https?:$/.test(location.protocol)) {
+      body.redirect_url = `${location.origin}${location.pathname}`;
+    }
+    if (full) {
+      body.customer = { name: a.nome, phone_number: `+55${a.telefone.replace(/\D/g, "")}` };
+      body.address = {
+        cep: a.cep.replace(/\D/g, ""),
+        street: a.rua,
+        number: a.numero,
+        neighborhood: a.bairro,
+        city: a.cidade,
+        state: a.uf,
+        ...(a.complemento ? { complement: a.complemento } : {}),
+      };
+    }
+    return body;
+  }
+ 
+  // Só aceita https em domínio da InfinitePay (evita redirecionar para destino inesperado)
+  function safeCheckoutUrl(value) {
+    if (typeof value !== "string") return "";
     try {
-      await navigator.clipboard.writeText(pixKey);
-      toast("Chave Pix copiada.");
-    } catch (err) {
-      console.error("[clipboard]", err);
-      toast("Não foi possível copiar. Selecione a chave e copie manualmente.", "error");
+      const u = new URL(value);
+      const okHost = u.hostname === "infinitepay.io" || u.hostname.endsWith(".infinitepay.io");
+      return u.protocol === "https:" && okHost ? u.href : "";
+    } catch {
+      return "";
+    }
+  }
+ 
+  // O formato da resposta não é documentado: tenta os nomes prováveis e, por fim, qualquer URL válida no JSON
+  function extractCheckoutUrl(data) {
+    if (!data || typeof data !== "object") return "";
+    for (const key of ["url", "checkout_url", "checkoutUrl", "link", "checkout_link", "payment_url", "payment_link"]) {
+      const ok = safeCheckoutUrl(data[key]);
+      if (ok) return ok;
+    }
+    for (const value of Object.values(data)) {
+      const ok = safeCheckoutUrl(value) || (value && typeof value === "object" && !Array.isArray(value) ? extractCheckoutUrl(value) : "");
+      if (ok) return ok;
+    }
+    return "";
+  }
+ 
+  async function postInfinitePay(body) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), INFINITEPAY.timeoutMs);
+    let res;
+    try {
+      res = await fetch(INFINITEPAY.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") throw new PaymentError("timeout");
+      throw new PaymentError("network"); // sem internet ou bloqueio de CORS
+    } finally {
+      clearTimeout(timer);
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* corpo não-JSON */ }
+    if (!res.ok) throw new PaymentError("http", res.status);
+    return data;
+  }
+ 
+  async function createCheckoutLink(order) {
+    const tooLow = order.lines.find(({ product: p }) => toCents(p.preco) < INFINITEPAY.minItemCents);
+    if (tooLow) throw new PaymentError("min", null);
+    let data;
+    try {
+      data = await postInfinitePay(buildInfinitePayBody(order, true));
+    } catch (error) {
+      // Dados opcionais recusados (validação): tenta uma vez só com o essencial
+      if (error instanceof PaymentError && error.message === "http" && (error.status === 400 || error.status === 422)) {
+        data = await postInfinitePay(buildInfinitePayBody(order, false));
+      } else {
+        throw error;
+      }
+    }
+    const url = extractCheckoutUrl(data);
+    if (!url) throw new PaymentError("no-link");
+    return url;
+  }
+ 
+  function paymentErrorMessage(error) {
+    if (!(error instanceof PaymentError)) return "Não foi possível iniciar o pagamento. Tente de novo.";
+    switch (error.message) {
+      case "timeout": return "O pagamento demorou para responder. Verifique sua conexão e tente de novo.";
+      case "network": return "Não foi possível conectar ao pagamento. Verifique sua internet e tente de novo.";
+      case "min": return "Há um item com valor abaixo do mínimo aceito para pagamento online (R$ 1,00).";
+      case "no-link": return "O pagamento não devolveu um link válido. Tente de novo ou fale com o lojista.";
+      default: return error.status === 429
+        ? "Muitas tentativas em pouco tempo. Aguarde um minuto e tente de novo."
+        : `O pagamento recusou o pedido (código ${error.status}). Tente de novo ou fale com o lojista.`;
+    }
+  }
+ 
+  function setBusyLabel(btn, label) {
+    const span = btn.querySelector("span:last-child");
+    if (span) span.textContent = label;
+  }
+ 
+  function releaseOrderUi() {
+    orderSending = false;
+    setBusy($("#mailOrder"), false);
+    $("#copyOrder").disabled = false;
+    $("#dlgOrder .icon-btn").disabled = false;
+  }
+ 
+  /* Fluxo: (1) cria o link na InfinitePay, (2) envia a notinha pelo EmailJS,
+   * (3) só então redireciona. Falha no passo 1 ou 2 não redireciona nem esvazia o carrinho.
+   * O link criado fica guardado em pendingOrder para o "tentar de novo" não gerar outro. */
+  async function sendOrder() {
+    if (!pendingOrder || orderSending) return;
+    const btn = $("#mailOrder");
+    const order = pendingOrder;
+    setOrderError("");
+ 
+    if (!window.emailjs || typeof window.emailjs.send !== "function") {
+      console.error("[emailjs] SDK não carregou");
+      showSendFailure("O serviço de envio não carregou (bloqueador de anúncios ou conexão).");
+      return;
+    }
+ 
+    orderSending = true;
+    setBusy(btn, true, order.online ? "Gerando pagamento..." : "Enviando pedido...");
+    $("#copyOrder").disabled = true;
+    $("#dlgOrder .icon-btn").disabled = true;
+ 
+    try {
+      if (order.online && !order.checkoutUrl) {
+        try {
+          order.checkoutUrl = await createCheckoutLink(order);
+        } catch (error) {
+          console.error("[infinitepay]", error);
+          showSendFailure(paymentErrorMessage(error));
+          releaseOrderUi();
+          return;
+        }
+        setBusyLabel(btn, "Enviando pedido...");
+      }
+ 
+      try {
+        await withTimeout(
+          window.emailjs.send(EMAILJS.serviceId, EMAILJS.templateId, order.params, EMAILJS.publicKey),
+          EMAIL_TIMEOUT_MS
+        );
+      } catch (error) {
+        console.error("[emailjs]", error);
+        showSendFailure(emailErrorMessage(error));
+        releaseOrderUi();
+        return;
+      }
+    } catch (error) {
+      console.error("[checkout]", error);
+      showSendFailure("Ocorreu um erro inesperado. Tente de novo.");
+      releaseOrderUi();
+      return;
+    }
+ 
+    // Notinha enviada: o pedido está registrado, então o carrinho pode ser esvaziado
+    pendingOrder = null;
+    cart = [];
+    saveCart();
+    renderCart();
+    checkoutForm.reset();
+ 
+    if (order.online) {
+      setBusyLabel(btn, "Redirecionando...");
+      window.location.assign(order.checkoutUrl); // orderSending segue true: o modal fica travado até sair da página
+      return;
+    }
+    releaseOrderUi();
+    dlgOrder.close();
+    $("#dlgSuccess").showModal();
+  }
+ 
+  // Voltar pelo botão do navegador (cache de página) não pode deixar o modal travado
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted && orderSending) {
+      releaseOrderUi();
+      if (dlgOrder.open) dlgOrder.close();
     }
   });
-
+ 
+  // Retorno do checkout da InfinitePay (redirect_url): só agradece, não prova pagamento
+  (() => {
+    const q = new URLSearchParams(location.search);
+    if (!q.has("order_nsu") || !(q.has("receipt_url") || q.has("transaction_nsu") || q.has("slug"))) return;
+    history.replaceState(null, "", location.pathname + location.hash);
+    setTimeout(() => toast("Obrigado! O lojista vai confirmar o seu pagamento e combinar a entrega."), 600);
+  })();
+ 
+  $("#mailOrder").addEventListener("click", sendOrder);
+  dlgOrder.addEventListener("cancel", (e) => { if (orderSending) e.preventDefault(); }); // Esc não fecha durante o envio
+ 
+  $$('input[name="pagamento"]', checkoutForm).forEach((radio) =>
+    radio.addEventListener("change", () => clearInvalid($("#payChoice")))
+  );
+ 
   checkoutForm.elements.cep.addEventListener("input", (e) => {
     e.target.value = formatCep(e.target.value);
   });
@@ -778,15 +1042,15 @@
   checkoutForm.elements.uf.addEventListener("input", (e) => {
     e.target.value = e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase();
   });
-
+ 
   checkoutForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const address = readAddress(checkoutForm);
     const errors = validateAddress(address);
-
+ 
     clearFormErrors(checkoutForm);
     const errBox = $("#checkoutError");
-
+ 
     if (errors.length) {
       errors.forEach((name) =>
         markInvalid(name === "pagamento" ? $("#payChoice") : checkoutForm.elements[name], ADDRESS_MESSAGES[name])
@@ -796,22 +1060,19 @@
       focusFirstInvalid(checkoutForm);
       return;
     }
-
+ 
     const lines = cartLines();
     const total = cartTotal();
     if (!lines.length) return;
-
+ 
     errBox.hidden = true;
     dlgCheckout.close();
     showOrder(lines, total, address);
-
-    // Pedido concluído: limpa carrinho; o endereço não foi gravado em lugar nenhum.
-    cart = [];
-    saveCart();
-    renderCart();
+    // O carrinho só é esvaziado depois que o envio do pedido for confirmado (sendOrder).
+    // Nome, telefone e endereço ficam apenas em memória.
     checkoutForm.reset();
   });
-
+ 
   /* ============================================================
    * Modais genéricos
    * ============================================================ */
@@ -820,32 +1081,33 @@
   );
   $$("dialog").forEach((dlg) => {
     dlg.addEventListener("click", (e) => {
+      if (dlg.id === "dlgOrder" && orderSending) return; // envio em andamento
       if (e.target === dlg) dlg.close();
       if (e.target.closest("[data-close]")) dlg.close();
     });
   });
-
+ 
   /* ============================================================
    * Painel administrativo
    * ============================================================ */
   const adminSection = $("#admin");
   const authForm = $("#authForm");
   const authError = $("#authError");
-
+ 
   const isLogged = () => Boolean(auth && auth.currentUser);
-
+ 
   function showAuthError(msg) {
     authError.textContent = msg;
     authError.hidden = !msg;
   }
-
+ 
   function renderAuthMode() {
     const logged = isLogged();
-
+ 
     $("#authCard").hidden = logged;
     $("#panel").hidden = !logged;
     $("#adminLogout").hidden = !logged;
-
+ 
     if (logged) {
       renderAdminRows();
       $("#settingsForm").elements.storeEmail.value = storeEmail;
@@ -853,7 +1115,7 @@
     }
     renderLegacyBox();
   }
-
+ 
   function openAdmin() {
     adminSection.hidden = false;
     document.body.style.overflow = "hidden";
@@ -861,37 +1123,37 @@
     authForm.reset();
     renderAuthMode();
   }
-
+ 
   function closeAdmin() {
     adminSection.hidden = true;
     document.body.style.overflow = "";
     if (location.hash === "#admin") history.replaceState(null, "", "#top");
   }
-
+ 
   const loginBtn = $("button[type=submit]", authForm);
   const MAX_ATTEMPTS = 5;
   const LOCK_MS = 30000;
   let failedAttempts = 0;
   let lockedUntil = 0;
-
+ 
   authForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     showAuthError("");
-
+ 
     if (loginBtn.dataset.busy === "1") return; // login em andamento
     const now = Date.now();
     if (now < lockedUntil) {
       showAuthError(`Muitas tentativas. Aguarde ${Math.ceil((lockedUntil - now) / 1000)} segundos.`);
       return;
     }
-
+ 
     const email = authForm.elements.email.value.trim().toLowerCase();
     const senha = authForm.elements.senha.value;
-
+ 
     // Camada 1: conferência por hash (mensagem imediata, sem revelar qual campo falhou).
     const emailOk = customHash(email) === ADMIN_EMAIL_HASH;
     const passOk = customHash(senha) === ADMIN_PASS_HASH;
-
+ 
     if (emailOk && passOk) {
       if (!auth) {
         showAuthError("Painel indisponível: Firebase não configurado ou não carregado. Veja o guia de configuração.");
@@ -925,7 +1187,7 @@
         setBusy(loginBtn, false);
       }
     }
-
+ 
     failedAttempts += 1;
     authForm.elements.senha.value = "";
     if (failedAttempts >= MAX_ATTEMPTS) {
@@ -935,12 +1197,12 @@
     showAuthError("Acesso Negado: Credenciais Inválidas");
     window.alert("Acesso Negado: Credenciais Inválidas");
   });
-
+ 
   $("#adminLogout").addEventListener("click", () => {
     if (auth) auth.signOut().catch((error) => console.error("[auth]", error));
   });
   $("#adminBack").addEventListener("click", closeAdmin);
-
+ 
   // Formulário de produto
   const productForm = $("#productForm");
   watchFormErrors(productForm);
@@ -948,22 +1210,22 @@
   productForm.elements.combo.addEventListener("change", (e) => {
     $("#comboLabelWrap").hidden = !e.target.checked;
   });
-
+ 
   /* ---------- Upload de foto: arquivo -> canvas -> JPEG em Base64 ---------- */
   const MAX_INPUT_BYTES = 15 * 1024 * 1024;
   const MAX_SIDE = 800;
   const JPEG_QUALITY = 0.78;
   const MAX_DOC_IMAGE = 900000; // o documento do Firestore aceita ~1 MiB
   const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-
+ 
   const photoInput = $("#productPhoto");
   const photoName = $("#photoName");
   const photoPreview = $("#photoPreview");
   const photoClear = $("#photoClear");
-
+ 
   let photoData = "";            // Base64 pronto para salvar
   let photoTask = Promise.resolve();
-
+ 
   function loadImage(file) {
     return new Promise((resolve, reject) => {
       const objectUrl = URL.createObjectURL(file);
@@ -976,7 +1238,7 @@
       img.src = objectUrl;
     });
   }
-
+ 
   async function fileToBase64(file) {
     if (!ACCEPTED_TYPES.includes(file.type)) {
       throw new Error("Formato não suportado. Use JPG, PNG, WEBP ou GIF.");
@@ -988,7 +1250,7 @@
     const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
     const w = Math.max(1, Math.round(img.naturalWidth * scale));
     const h = Math.max(1, Math.round(img.naturalHeight * scale));
-
+ 
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
@@ -996,12 +1258,12 @@
     ctx.fillStyle = "#ffffff"; // PNG com transparência vira fundo branco no JPEG
     ctx.fillRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0, w, h);
-
+ 
     const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
     if (!DATA_IMAGE_RE.test(dataUrl)) throw new Error("Falha ao converter a imagem.");
     return dataUrl;
   }
-
+ 
   function resetPhoto() {
     photoData = "";
     photoInput.value = "";
@@ -1010,13 +1272,13 @@
     photoPreview.removeAttribute("src");
     photoClear.hidden = true;
   }
-
+ 
   photoInput.addEventListener("change", () => {
     const file = photoInput.files && photoInput.files[0];
     const err = $("#productError");
     err.hidden = true;
     if (!file) { resetPhoto(); return; }
-
+ 
     photoName.replaceChildren(el("span", { class: "spinner spinner--dark", "aria-hidden": "true" }), document.createTextNode(`Processando ${file.name}...`));
     photoTask = fileToBase64(file)
       .then((dataUrl) => {
@@ -1034,7 +1296,7 @@
       });
   });
   photoClear.addEventListener("click", resetPhoto);
-
+ 
   productForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const err = $("#productError");
@@ -1043,27 +1305,27 @@
       err.hidden = false;
       return;
     }
-
+ 
     if ($("button[type=submit]", productForm).dataset.busy === "1") return; // já enviando
     await photoTask; // garante que a foto escolhida terminou de ser convertida
-
+ 
     const f = productForm.elements;
     const nome = f.nome.value.trim();
     const preco = maskedToNumber(f.preco.value);
-
+ 
     clearFormErrors(productForm);
     if (nome.length < 2) markInvalid(f.nome, "Informe o nome do produto (mínimo 2 letras).");
     if (Number.isNaN(preco)) markInvalid(f.preco, "Informe um valor válido, por exemplo 1.299,90.");
     else if (preco >= 100000) markInvalid(f.preco, "O valor máximo é R$ 99.999,99.");
     const photoProblem = photoData.length > MAX_DOC_IMAGE ? "A foto ficou grande demais para a nuvem. Escolha outra, menor." : "";
-
+ 
     if ($('[aria-invalid="true"]', productForm) || photoProblem) {
       err.textContent = photoProblem || "Corrija os campos destacados para continuar.";
       err.hidden = false;
       focusFirstInvalid(productForm);
       return;
     }
-
+ 
     err.hidden = true;
     const isPromo = f.promo.checked;
     const submit = $("button[type=submit]", productForm);
@@ -1091,7 +1353,7 @@
       setBusy(submit, false);
     }
   });
-
+ 
   function renderAdminRows() {
     const tbody = $("#adminRows");
     tbody.replaceChildren(
@@ -1130,10 +1392,10 @@
         };
         priceInput.addEventListener("change", save);
         priceInput.addEventListener("keydown", (e) => { if (e.key === "Enter") priceInput.blur(); });
-
+ 
         const thumb = el("img", { src: imageFor(p), alt: "", width: "48", height: "60" });
         thumb.addEventListener("error", () => { thumb.src = placeholderImage(p.categoria, p.combo); }, { once: true });
-
+ 
         return el("tr", {}, [
           el("td", {}, thumb),
           el("td", { text: p.nome }),
@@ -1182,7 +1444,7 @@
       })
     );
   }
-
+ 
   const settingsForm = $("#settingsForm");
   watchFormErrors(settingsForm);
   settingsForm.addEventListener("submit", async (e) => {
@@ -1193,7 +1455,7 @@
     const err = $("#settingsError");
     clearFormErrors(settingsForm);
     err.hidden = true;
-
+ 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       markInvalid(field, "Informe um e-mail válido, por exemplo loja@dominio.com.");
       field.focus();
@@ -1204,7 +1466,7 @@
       err.hidden = false;
       return;
     }
-
+ 
     const btn = $("button[type=submit]", settingsForm);
     setBusy(btn, true, "Salvando...");
     try {
@@ -1218,7 +1480,7 @@
       setBusy(btn, false);
     }
   });
-
+ 
   /* ============================================================
    * Painel: chave Pix e QR Code (settings/store, leitura pública)
    * ============================================================ */
@@ -1231,7 +1493,7 @@
   let pixQrDraft = null;       // null = sem alteração; "" = removido; texto = novo QR ainda não salvo
   let pixQrTask = Promise.resolve();
   watchFormErrors(pixForm);
-
+ 
   async function qrToDataUrl(file) {
     if (!ACCEPTED_TYPES.includes(file.type)) throw new Error("Formato não suportado. Use JPG, PNG, WEBP ou GIF.");
     if (file.size > MAX_INPUT_BYTES) throw new Error("A imagem é grande demais (máximo 15 MB).");
@@ -1253,7 +1515,7 @@
     }
     return url;
   }
-
+ 
   function renderPixAdmin() {
     const keyField = pixForm.elements.pixKey;
     if (document.activeElement !== keyField) keyField.value = pixKey;
@@ -1264,7 +1526,7 @@
     pixQrClear.hidden = !shown;
     pixQrName.textContent = pixQrDraft ? "Novo QR Code (ainda não salvo)" : pixQr && pixQrDraft === null ? "QR Code cadastrado" : "Nenhum arquivo selecionado";
   }
-
+ 
   pixQrFile.addEventListener("change", () => {
     const file = pixQrFile.files && pixQrFile.files[0];
     const err = $("#pixError");
@@ -1283,25 +1545,25 @@
         renderPixAdmin();
       });
   });
-
+ 
   pixQrClear.addEventListener("click", () => {
     pixQrDraft = "";
     pixQrFile.value = "";
     renderPixAdmin();
   });
-
+ 
   pixForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = $("button[type=submit]", pixForm);
     if (btn.dataset.busy === "1") return;
     await pixQrTask;
-
+ 
     const err = $("#pixError");
     const key = pixForm.elements.pixKey.value.trim();
     const qr = pixQrDraft !== null ? pixQrDraft : pixQr;
     clearFormErrors(pixForm);
     err.hidden = true;
-
+ 
     if (!key && !qr) {
       markInvalid(pixForm.elements.pixKey, "Informe a chave Pix ou escolha o QR Code.");
       pixForm.elements.pixKey.focus();
@@ -1317,7 +1579,7 @@
       err.hidden = false;
       return;
     }
-
+ 
     setBusy(btn, true, "Salvando...");
     try {
       await withTimeout(db.collection("settings").doc("store").set({ pixKey: key, pixQr: qr }, { merge: true }));
@@ -1332,19 +1594,19 @@
       renderPixAdmin();
     }
   });
-
+ 
   /* ============================================================
    * Nuvem (Firebase): catálogo em tempo real, login e escrita
    * ============================================================ */
   const cloudStatus = $("#cloudStatus");
   let loadingTimer;
-
+ 
   function setCloudStatus(msg, kind = "info") {
     cloudStatus.textContent = msg;
     cloudStatus.dataset.kind = kind;
     cloudStatus.hidden = !msg;
   }
-
+ 
   function withTimeout(promise, ms = 15000) {
     let timer;
     const timeout = new Promise((_, reject) => {
@@ -1352,7 +1614,7 @@
     });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
-
+ 
   function cloudErrorMessage(error) {
     const code = (error && error.code) || "";
     if (code === "permission-denied") return "Sem permissão. Entre de novo como lojista e confira as regras do Firestore.";
@@ -1362,7 +1624,7 @@
     if (code === "invalid-argument" || code === "out-of-range") return "A nuvem recusou os dados (foto grande demais?).";
     return `Erro na nuvem (${code || (error && error.message) || "desconhecido"}).`;
   }
-
+ 
   function normalizeProduct(id, d) {
     if (!d || typeof d.nome !== "string" || typeof d.preco !== "number" || !Number.isFinite(d.preco) || d.preco <= 0) return null;
     const created = d.createdAt && typeof d.createdAt.toMillis === "function" ? d.createdAt.toMillis() : Date.now();
@@ -1378,7 +1640,7 @@
       createdAt: created,
     };
   }
-
+ 
   function onProductsSnapshot(snap) {
     const list = [];
     snap.forEach((doc) => {
@@ -1386,7 +1648,7 @@
       if (p) list.push(p);
     });
     list.sort((a, b) => b.createdAt - a.createdAt);
-
+ 
     products = list;
     catalogReady = true;
     catalogLoading = false;
@@ -1400,7 +1662,7 @@
     if (isLogged() && !editingPrice) renderAdminRows();
     list.forEach((p) => seenIds.add(p.id));
   }
-
+ 
   function initCloud() {
     if (typeof window.firebase === "undefined") {
       setCloudStatus("Não foi possível carregar o Firebase. Verifique a conexão com a internet.", "error");
@@ -1410,7 +1672,7 @@
       setCloudStatus("Catálogo em nuvem ainda não configurado: preencha o bloco FIREBASE_CONFIG no index.html.", "warn");
       return;
     }
-
+ 
     try {
       const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(FIREBASE_CONFIG);
       auth = firebase.auth(app);
@@ -1420,19 +1682,19 @@
       setCloudStatus("Configuração do Firebase inválida. Confira os dados colados no index.html.", "error");
       return;
     }
-
+ 
     // Sessão do lojista vale só para a aba, como antes
     persistenceReady = auth.setPersistence(firebase.auth.Auth.Persistence.SESSION)
       .catch((error) => console.error("[auth]", error));
     auth.onAuthStateChanged(() => renderAuthMode());
-
+ 
     setCloudStatus("");
     catalogLoading = true;
     renderCatalog(); // mostra o esqueleto dos cards
     loadingTimer = setTimeout(() => {
       if (!catalogReady) setCloudStatus("O catálogo está demorando mais que o normal. Verifique sua conexão.", "warn");
     }, 10000);
-
+ 
     db.collection("produtos").onSnapshot(onProductsSnapshot, (error) => {
       console.error("[catalogo]", error);
       catalogLoading = false;
@@ -1446,7 +1708,7 @@
         "error"
       );
     });
-
+ 
     db.collection("settings").doc("store").onSnapshot((doc) => {
       const data = doc.exists ? doc.data() : null;
       storeEmail = data && typeof data.storeEmail === "string" ? data.storeEmail : "";
@@ -1455,10 +1717,9 @@
       const field = $("#settingsForm").elements.storeEmail;
       if (isLogged() && document.activeElement !== field) field.value = storeEmail;
       if (isLogged()) renderPixAdmin();
-      renderPix();
-    }, (error) => console.error("[settings]", error));
+      }, (error) => console.error("[settings]", error));
   }
-
+ 
   /* ---------- Migração do catálogo antigo (localStorage) para a nuvem ---------- */
   function legacyProducts() {
     const raw = storage.get(LEGACY_PRODUCTS_KEY, []);
@@ -1468,7 +1729,7 @@
       .map((p) => normalizeProduct(p.id, p))
       .filter(Boolean);
   }
-
+ 
   function renderLegacyBox() {
     const list = isLogged() ? legacyProducts() : [];
     $("#legacyCard").hidden = list.length === 0;
@@ -1477,7 +1738,7 @@
         `Há ${list.length} produto(s) cadastrado(s) neste navegador antes da nuvem. Envie para que todos os visitantes passem a vê-los.`;
     }
   }
-
+ 
   $("#legacyBtn").addEventListener("click", async () => {
     const list = legacyProducts();
     const btn = $("#legacyBtn");
@@ -1504,13 +1765,13 @@
       renderLegacyBox();
     }
   });
-
+ 
   $("#legacyDiscard").addEventListener("click", () => {
     if (!window.confirm("Descartar os produtos antigos deste navegador? Esta ação não pode ser desfeita.")) return;
     try { localStorage.removeItem(LEGACY_PRODUCTS_KEY); } catch (error) { console.error("[storage]", error); }
     renderLegacyBox();
   });
-
+ 
   /* ============================================================
    * Inicialização
    * ============================================================ */
@@ -1526,12 +1787,12 @@
       }
     })
   );
-
+ 
   // Menu hambúrguer (celular)
   const menuBtn = $("#menuBtn");
   const mobileMenu = $("#mobileMenu");
   const menuOverlay = $("#menuOverlay");
-
+ 
   function openMenu() {
     menuOverlay.hidden = false;
     mobileMenu.classList.add("is-open");
@@ -1540,7 +1801,7 @@
     document.body.classList.add("no-scroll");
     $("#closeMenu").focus();
   }
-
+ 
   function closeMenu(restoreFocus = false) {
     if (!mobileMenu.classList.contains("is-open")) return;
     mobileMenu.classList.remove("is-open");
@@ -1550,7 +1811,7 @@
     document.body.classList.remove("no-scroll");
     if (restoreFocus) menuBtn.focus();
   }
-
+ 
   menuBtn.addEventListener("click", openMenu);
   $("#closeMenu").addEventListener("click", () => closeMenu(true));
   menuOverlay.addEventListener("click", () => closeMenu(true));
@@ -1558,13 +1819,13 @@
   const desktopQuery = window.matchMedia("(min-width: 761px)");
   const onDesktop = (e) => { if (e.matches) closeMenu(); };
   if (desktopQuery.addEventListener) desktopQuery.addEventListener("change", onDesktop);
-
+ 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (drawer.classList.contains("is-open")) closeCart();
     closeMenu(true);
   });
-
+ 
   // Busca e ordenação do catálogo
   const searchInput = $("#searchInput");
   const sortSelect = $("#sortSelect");
@@ -1579,7 +1840,7 @@
     sortMode = sortSelect.value;
     renderCatalog();
   });
-
+ 
   // Logo: usa img/logo.jpg; se nao existir, mostra o texto de reserva
   [["#brandImg", "#brandFallback"], ["#splashImg", "#splashFallback"]].forEach(([imgSel, fbSel]) => {
     const img = $(imgSel);
@@ -1588,11 +1849,11 @@
     img.addEventListener("error", swap, { once: true });
     if (img.complete && img.naturalWidth === 0) swap();
   });
-
+ 
   // Roteamento simples do painel por hash
   const syncRoute = () => (location.hash === "#admin" ? openAdmin() : adminSection.hidden || closeAdmin());
   window.addEventListener("hashchange", syncRoute);
-
+ 
   // Splash
   const splash = $("#splash");
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1605,10 +1866,11 @@
   if (document.readyState === "complete") startSplash();
   else window.addEventListener("load", startSplash);
   setTimeout(hideSplash, 5000);
-
+ 
   renderFilters();
   renderCatalog();
   renderCart();
   syncRoute();
   initCloud();
 })();
+ 

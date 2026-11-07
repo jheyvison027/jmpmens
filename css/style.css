@@ -454,3 +454,13 @@ input.is-saving { opacity: .6; cursor: progress; }
   .order-line { grid-template-columns: 48px minmax(0, 1fr) auto; gap: 10px; }
   .order-line img { width: 48px; height: 60px; }
 }
+
+/* Envio do pedido e confirmacao */
+.modal__body .form-error { margin-top: 14px; }
+.modal__foot .btn[hidden] { display: none; }
+.btn:disabled { cursor: not-allowed; }
+.btn.is-loading:disabled { cursor: progress; }
+.success { text-align: center; padding-block: 28px; }
+.success__badge { margin: 0 auto 14px; width: 56px; height: 56px; border-radius: 50%; border: 2px solid var(--gold); color: var(--gold-dark); background: var(--cream-2); display: grid; place-items: center; }
+.success__title { font-family: var(--serif); font-size: 1.7rem; font-weight: 600; margin: 0 0 8px; color: var(--ink); }
+.success p:last-child { color: var(--ink-soft); margin: 0; }
